@@ -37,7 +37,7 @@ From the `Client` object, you can now access dotloop data.
 
 For example, get data about all profiles
 ```python
-client.profile.get()  # -> Dict
+client.profile.get()  # -> dict
 ```
 
 or get data about a specific profile
