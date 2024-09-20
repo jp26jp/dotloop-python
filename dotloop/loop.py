@@ -1,5 +1,6 @@
+import datetime
 import logging
-from typing import Optional
+from typing import Optional, Generator
 
 from .activity import Activity
 from .bases import DotloopObject
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 class Loop(DotloopObject):
     """Represents a loop in the Dotloop API."""
+
     ID_FIELD = "loop_id"
 
     def __init__(self, parent: Optional[DotloopObject] = None):
@@ -25,7 +27,7 @@ class Loop(DotloopObject):
         super().__init__(parent)
         logger.debug(f"Loop initialized with parent: {parent}")
 
-    def __call__(self, loop_id: str) -> 'Loop':
+    def __call__(self, loop_id: str) -> "Loop":
         """
         Allow setting the loop_id using method chaining.
 
@@ -133,3 +135,52 @@ class Loop(DotloopObject):
             DotloopAPIException: If there's an error updating the loop information.
         """
         return self.fetch("patch", json=kwargs)
+
+    def get_updated_since(
+        self, date: datetime, batch_size: int = 100
+    ) -> Generator[dict, None, None]:
+        """
+        Retrieve all loops updated since the given date, handling pagination.
+
+        Args:
+            date (datetime): The date to filter from
+            batch_size (int): Number of loops to retrieve per page (default: 100, max: 100)
+
+        Yields:
+            dict: A dictionary containing loop information for each loop
+        """
+        formatted_date = date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        filter_param = f"updated_min={formatted_date}"
+
+        batch_number = 1
+        total_loops = None
+        loops_fetched = 0
+
+        while total_loops is None or loops_fetched < total_loops:
+            params = {
+                "batch_size": min(batch_size, 100),
+                "batch_number": batch_number,
+                "filter": filter_param,
+            }
+
+            response = self.fetch("get", params=params)
+
+            if total_loops is None:
+                total_loops = response.get("meta", {}).get("total")
+                logger.debug(f"Total loops to fetch: {total_loops}")
+
+            loops = response.get("data", [])
+            for loop in loops:
+                loop_updated = loop.get('updated')
+                logger.debug(f"Loop ID: {loop.get('id')}, Updated: {loop_updated}")
+                if loop_updated < formatted_date:
+                    logger.warning(
+                        f"Loop {loop.get('id')} updated before filter date: {loop_updated} < {formatted_date}")
+                yield loop
+                loops_fetched += 1
+
+            if len(loops) < batch_size:
+                break
+
+            batch_number += 1
+        logger.debug(f"Finished fetching loops. Total fetched: {loops_fetched}")
