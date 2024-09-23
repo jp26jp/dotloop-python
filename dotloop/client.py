@@ -63,12 +63,18 @@ class Client(DotloopObject):
             bool: True if the token is valid, False otherwise.
         """
         try:
-            # Assuming there's a lightweight endpoint like 'account' to check authentication
-            self.account.get()
+            response = self.account.get()
+            logger.debug(f"Token validation response: {response}")
             return True
         except DotloopAuthException:
+            logger.info("Token is invalid (401 Unauthorized)")
             return False
-
+        except DotloopAPIException as e:
+            logger.error(f"Unexpected API exception during token validation: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error in is_token_valid: {e}")
+            return False
 
     def ensure_valid_token(self):
         """

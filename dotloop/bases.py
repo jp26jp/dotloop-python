@@ -5,6 +5,8 @@ from urllib.parse import urljoin
 
 import requests
 
+from dotloop.exceptions import DotloopAuthException, DotloopAPIException
+
 logger = logging.getLogger(__name__)
 
 
@@ -294,9 +296,9 @@ class DotloopObject:
             dict: The JSON response from the API.
 
         Raises:
+            DotloopAuthException: If there's an authentication error (401).
+            DotloopAPIException: If there's any other API error.
             ValueError: If an invalid HTTP method is provided.
-            requests.RequestException: If there's an error with the request.
-            JSONDecodeError: If the response cannot be decoded as JSON.
         """
         logger.debug(f"Fetching with method: {method}, class: {self.__class__.__name__}, id_value: {self.id_value}")
         try:
@@ -327,10 +329,10 @@ class DotloopObject:
             logger.debug(f"Response content: {response.content[:100]}...")  # Log first 100 chars of content
             response.raise_for_status()
             return response.json()
-        except requests.RequestException as e:
-            logger.error(f"Request failed: {e}")
-            return {'error': 'RequestException', 'message': str(e), 'status': getattr(e.response, 'status_code', None)}
-        except JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            return {'error': 'JSONDecodeError', 'message': f'{str(e)}: {response.content.decode()}',
-                    'status': response.status_code}
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise DotloopAuthException("Authentication failed", status_code=401) from e
+            else:
+                raise DotloopAPIException(f"API request failed: {str(e)}", status_code=e.response.status_code) from e
+        except requests.exceptions.RequestException as e:
+            raise DotloopAPIException(f"Request failed: {str(e)}") from e
