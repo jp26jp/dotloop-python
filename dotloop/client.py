@@ -108,9 +108,6 @@ class Client(DotloopObject):
             if 'refresh_token' in response:
                 self._refresh_token = response['refresh_token']
 
-            if 'expires_in' in response:
-                self.set_token_expiration(response['expires_in'])
-
             return response
         except Exception as e:
             raise DotloopAuthException(f"Error refreshing token: {str(e)}") from e
