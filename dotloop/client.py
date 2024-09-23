@@ -4,8 +4,9 @@ from functools import cached_property
 import requests
 
 from .account import Account
+from .authenticate import Authenticate
 from .contact import Contact
-from .exceptions import DotloopAPIException
+from .exceptions import DotloopAPIException, DotloopAuthException
 from .profile import Profile
 from .bases import endpoint_directory, DotloopObject
 
@@ -15,17 +16,16 @@ class Client(DotloopObject):
     """Client class for interacting with the Dotloop API."""
     endpoint_directory = endpoint_directory
 
-    def __init__(self, access_token: str):
-        """
-        Initialize the Client.
-
-        Args:
-            access_token (str): The access token for API authentication.
-        """
+    def __init__(self, access_token: str, client_id: str, client_secret: str, refresh_token: str):
         super().__init__()
         self._session = requests.Session()
         self._access_token = access_token
+        self._refresh_token = refresh_token
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._auth = Authenticate(client_id, client_secret)
         self._update_session_headers()
+
 
     def __str__(self) -> str:
         """Return a string representation of the Client."""
@@ -109,13 +109,43 @@ class Client(DotloopObject):
                 f"Unable to fetch default profile ID: {error_message}"
             ) from e
 
-    def fetch(self, method: str, endpoint: str, **kwargs: any) -> dict[str, any]:
+    def refresh_token(self) -> dict:
         """
-        Fetch data from the Dotloop API.
+        Refresh the access token using the refresh token.
+
+        Returns:
+            dict: The full response from the token refresh API call.
+
+        Raises:
+            DotloopAuthException: If there's an error refreshing the token.
+        """
+        try:
+            response = self._auth.refresh_access_token(self._refresh_token)
+
+            # Update the access token
+            if 'access_token' in response:
+                self.access_token = response['access_token']
+            else:
+                raise DotloopAuthException("No access token in refresh response")
+
+            # Update the refresh token if a new one is provided
+            if 'refresh_token' in response:
+                self._refresh_token = response['refresh_token']
+
+            # Update session headers with the new access token
+            self._update_session_headers()
+
+            return response
+        except Exception as e:
+            raise DotloopAuthException(f"Error refreshing token: {str(e)}") from e
+
+
+    def fetch(self, method: str, **kwargs) -> dict[str, any]:
+        """
+        Fetch data from the Dotloop API, with automatic token refresh on authentication error.
 
         Args:
             method (str): The HTTP method to use.
-            endpoint (str): The API endpoint to call.
             **kwargs: Additional keyword arguments for the request.
 
         Returns:
@@ -125,8 +155,19 @@ class Client(DotloopObject):
             DotloopAPIException: If there's an error with the API request.
         """
         try:
-            response = getattr(self._session, method.lower())(endpoint, **kwargs)
+            response = getattr(self._session, method.lower())(**kwargs)
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:  # Unauthorized
+                try:
+                    self.refresh_token()
+                    # Retry the request with the new token
+                    response = getattr(self._session, method.lower())(**kwargs)
+                    response.raise_for_status()
+                    return response.json()
+                except Exception as refresh_error:
+                    raise DotloopAuthException(f"Token refresh failed: {str(refresh_error)}") from refresh_error
+            raise DotloopAPIException(f"API request failed: {str(e)}") from e
         except requests.RequestException as e:
             raise DotloopAPIException(f"API request failed: {str(e)}") from e
