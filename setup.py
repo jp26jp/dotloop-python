@@ -7,7 +7,7 @@ if __name__ == '__main__':
 
     setuptools.setup(
         name='dotloop-python',
-        version='0.0.9',
+        version='0.0.10',
         packages=setuptools.find_packages(),
         install_requires=['requests'],
         author='Ben Russell',

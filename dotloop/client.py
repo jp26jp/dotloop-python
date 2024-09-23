@@ -1,5 +1,7 @@
 import logging
+import time
 from functools import cached_property
+from typing import Optional
 
 import requests
 
@@ -31,6 +33,7 @@ class Client(DotloopObject):
         """Return a string representation of the Client."""
         return "<Client>"
 
+
     @property
     def access_token(self) -> str:
         """Get the current access token."""
@@ -51,6 +54,66 @@ class Client(DotloopObject):
         """Update the session headers with the current access token."""
         self._session.headers.update(self._headers)
         logger.debug(f"Debug: Headers set to {self._session.headers}")  # Add this line
+
+    def is_token_valid(self) -> bool:
+        """
+        Check if the current access token is valid by making a lightweight API call.
+
+        Returns:
+            bool: True if the token is valid, False otherwise.
+        """
+        try:
+            # Assuming there's a lightweight endpoint like 'account' to check authentication
+            self.account.get()
+            return True
+        except DotloopAuthException:
+            return False
+
+
+    def ensure_valid_token(self):
+        """
+        Ensure that the client has a valid token, refreshing if necessary.
+
+        Returns:
+            dict: The refresh response if a refresh was performed, None otherwise.
+
+        Raises:
+            DotloopAuthException: If unable to refresh the token.
+        """
+        if self.is_token_valid():
+            logger.info("Token is still valid")
+            return None
+        logger.info("Token is invalid, refreshing...")
+        return self.refresh_token()
+
+    def refresh_token(self) -> dict:
+        """
+        Refresh the access token using the refresh token.
+
+        Returns:
+            dict: The full response from the token refresh API call.
+
+        Raises:
+            DotloopAuthException: If there's an error refreshing the token.
+        """
+        try:
+            response = self._auth.refresh_access_token(self._refresh_token)
+
+            if 'access_token' in response:
+                self._access_token = response['access_token']
+                self._update_session_headers()
+            else:
+                raise DotloopAuthException("No access token in refresh response")
+
+            if 'refresh_token' in response:
+                self._refresh_token = response['refresh_token']
+
+            if 'expires_in' in response:
+                self.set_token_expiration(response['expires_in'])
+
+            return response
+        except Exception as e:
+            raise DotloopAuthException(f"Error refreshing token: {str(e)}") from e
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -109,40 +172,9 @@ class Client(DotloopObject):
                 f"Unable to fetch default profile ID: {error_message}"
             ) from e
 
-    def refresh_token(self) -> dict:
-        """
-        Refresh the access token using the refresh token.
-
-        Returns:
-            dict: The full response from the token refresh API call.
-
-        Raises:
-            DotloopAuthException: If there's an error refreshing the token.
-        """
-        try:
-            response = self._auth.refresh_access_token(self._refresh_token)
-
-            # Update the access token
-            if 'access_token' in response:
-                self.access_token = response['access_token']
-            else:
-                raise DotloopAuthException("No access token in refresh response")
-
-            # Update the refresh token if a new one is provided
-            if 'refresh_token' in response:
-                self._refresh_token = response['refresh_token']
-
-            # Update session headers with the new access token
-            self._update_session_headers()
-
-            return response
-        except Exception as e:
-            raise DotloopAuthException(f"Error refreshing token: {str(e)}") from e
-
-
     def fetch(self, method: str, **kwargs) -> dict[str, any]:
         """
-        Fetch data from the Dotloop API, with automatic token refresh on authentication error.
+        Fetch data from the Dotloop API, ensuring a valid token before making the request.
 
         Args:
             method (str): The HTTP method to use.
@@ -154,20 +186,11 @@ class Client(DotloopObject):
         Raises:
             DotloopAPIException: If there's an error with the API request.
         """
+        self.ensure_valid_token()
+
         try:
             response = getattr(self._session, method.lower())(**kwargs)
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:  # Unauthorized
-                try:
-                    self.refresh_token()
-                    # Retry the request with the new token
-                    response = getattr(self._session, method.lower())(**kwargs)
-                    response.raise_for_status()
-                    return response.json()
-                except Exception as refresh_error:
-                    raise DotloopAuthException(f"Token refresh failed: {str(refresh_error)}") from refresh_error
-            raise DotloopAPIException(f"API request failed: {str(e)}") from e
-        except requests.RequestException as e:
+        except requests.exceptions.RequestException as e:
             raise DotloopAPIException(f"API request failed: {str(e)}") from e
